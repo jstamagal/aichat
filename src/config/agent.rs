@@ -69,6 +69,12 @@ impl Agent {
                     if agent_config.top_p.is_none() {
                         agent_config.top_p = config.top_p;
                     }
+                    if agent_config.frequency_penalty.is_none() {
+                        agent_config.frequency_penalty = config.frequency_penalty;
+                    }
+                    if agent_config.presence_penalty.is_none() {
+                        agent_config.presence_penalty = config.presence_penalty;
+                    }
                     config.current_model().clone()
                 }
             }
@@ -344,6 +350,14 @@ impl RoleLike for Agent {
         self.config.top_p
     }
 
+    fn frequency_penalty(&self) -> Option<f64> {
+        self.config.frequency_penalty
+    }
+
+    fn presence_penalty(&self) -> Option<f64> {
+        self.config.presence_penalty
+    }
+
     fn use_tools(&self) -> Option<String> {
         self.config.use_tools.clone()
     }
@@ -361,6 +375,14 @@ impl RoleLike for Agent {
         self.config.top_p = value;
     }
 
+    fn set_frequency_penalty(&mut self, value: Option<f64>) {
+        self.config.frequency_penalty = value;
+    }
+
+    fn set_presence_penalty(&mut self, value: Option<f64>) {
+        self.config.presence_penalty = value;
+    }
+
     fn set_use_tools(&mut self, value: Option<String>) {
         self.config.use_tools = value;
     }
@@ -374,6 +396,10 @@ pub struct AgentConfig {
     pub temperature: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub top_p: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frequency_penalty: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub presence_penalty: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub use_tools: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -412,6 +438,12 @@ impl AgentConfig {
         }
         if let Some(v) = read_env_value::<f64>(&with_prefix("top_p")) {
             self.top_p = v;
+        }
+        if let Some(v) = read_env_value::<f64>(&with_prefix("frequency_penalty")) {
+            self.frequency_penalty = v;
+        }
+        if let Some(v) = read_env_value::<f64>(&with_prefix("presence_penalty")) {
+            self.presence_penalty = v;
         }
         if let Some(v) = read_env_value::<String>(&with_prefix("use_tools")) {
             self.use_tools = v;

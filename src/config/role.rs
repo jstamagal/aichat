@@ -28,10 +28,14 @@ pub trait RoleLike {
     fn model(&self) -> &Model;
     fn temperature(&self) -> Option<f64>;
     fn top_p(&self) -> Option<f64>;
+    fn frequency_penalty(&self) -> Option<f64>;
+    fn presence_penalty(&self) -> Option<f64>;
     fn use_tools(&self) -> Option<String>;
     fn set_model(&mut self, model: Model);
     fn set_temperature(&mut self, value: Option<f64>);
     fn set_top_p(&mut self, value: Option<f64>);
+    fn set_frequency_penalty(&mut self, value: Option<f64>);
+    fn set_presence_penalty(&mut self, value: Option<f64>);
     fn set_use_tools(&mut self, value: Option<String>);
 }
 
@@ -49,6 +53,10 @@ pub struct Role {
     temperature: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     top_p: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    frequency_penalty: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    presence_penalty: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     use_tools: Option<String>,
 
@@ -81,6 +89,8 @@ impl Role {
                             "model" => role.model_id = value.as_str().map(|v| v.to_string()),
                             "temperature" => role.temperature = value.as_f64(),
                             "top_p" => role.top_p = value.as_f64(),
+                            "frequency_penalty" => role.frequency_penalty = value.as_f64(),
+                            "presence_penalty" => role.presence_penalty = value.as_f64(),
                             "use_tools" => role.use_tools = value.as_str().map(|v| v.to_string()),
                             _ => (),
                         }
@@ -125,6 +135,12 @@ impl Role {
         if let Some(top_p) = self.top_p() {
             metadata.push(format!("top_p: {top_p}"));
         }
+        if let Some(frequency_penalty) = self.frequency_penalty() {
+            metadata.push(format!("frequency_penalty: {frequency_penalty}"));
+        }
+        if let Some(presence_penalty) = self.presence_penalty() {
+            metadata.push(format!("presence_penalty: {presence_penalty}"));
+        }
         if let Some(use_tools) = self.use_tools() {
             metadata.push(format!("use_tools: {use_tools}"));
         }
@@ -164,8 +180,17 @@ impl Role {
         let model = role_like.model();
         let temperature = role_like.temperature();
         let top_p = role_like.top_p();
+        let frequency_penalty = role_like.frequency_penalty();
+        let presence_penalty = role_like.presence_penalty();
         let use_tools = role_like.use_tools();
-        self.batch_set(model, temperature, top_p, use_tools);
+        self.batch_set(
+            model,
+            temperature,
+            top_p,
+            frequency_penalty,
+            presence_penalty,
+            use_tools,
+        );
     }
 
     pub fn batch_set(
@@ -173,6 +198,8 @@ impl Role {
         model: &Model,
         temperature: Option<f64>,
         top_p: Option<f64>,
+        frequency_penalty: Option<f64>,
+        presence_penalty: Option<f64>,
         use_tools: Option<String>,
     ) {
         self.set_model(model.clone());
@@ -181,6 +208,12 @@ impl Role {
         }
         if top_p.is_some() {
             self.set_top_p(top_p);
+        }
+        if frequency_penalty.is_some() {
+            self.set_frequency_penalty(frequency_penalty);
+        }
+        if presence_penalty.is_some() {
+            self.set_presence_penalty(presence_penalty);
         }
         if use_tools.is_some() {
             self.set_use_tools(use_tools);
@@ -276,6 +309,14 @@ impl RoleLike for Role {
         self.top_p
     }
 
+    fn frequency_penalty(&self) -> Option<f64> {
+        self.frequency_penalty
+    }
+
+    fn presence_penalty(&self) -> Option<f64> {
+        self.presence_penalty
+    }
+
     fn use_tools(&self) -> Option<String> {
         self.use_tools.clone()
     }
@@ -293,6 +334,14 @@ impl RoleLike for Role {
 
     fn set_top_p(&mut self, value: Option<f64>) {
         self.top_p = value;
+    }
+
+    fn set_frequency_penalty(&mut self, value: Option<f64>) {
+        self.frequency_penalty = value;
+    }
+
+    fn set_presence_penalty(&mut self, value: Option<f64>) {
+        self.presence_penalty = value;
     }
 
     fn set_use_tools(&mut self, value: Option<String>) {

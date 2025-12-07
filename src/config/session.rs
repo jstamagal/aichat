@@ -25,6 +25,10 @@ pub struct Session {
     #[serde(skip_serializing_if = "Option::is_none")]
     top_p: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    frequency_penalty: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    presence_penalty: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     use_tools: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     save_session: Option<bool>,
@@ -154,6 +158,12 @@ impl Session {
         if let Some(top_p) = self.top_p() {
             data["top_p"] = top_p.into();
         }
+        if let Some(frequency_penalty) = self.frequency_penalty() {
+            data["frequency_penalty"] = frequency_penalty.into();
+        }
+        if let Some(presence_penalty) = self.presence_penalty() {
+            data["presence_penalty"] = presence_penalty.into();
+        }
         if let Some(use_tools) = self.use_tools() {
             data["use_tools"] = use_tools.into();
         }
@@ -197,6 +207,12 @@ impl Session {
         }
         if let Some(top_p) = self.top_p() {
             items.push(("top_p", top_p.to_string()));
+        }
+        if let Some(frequency_penalty) = self.frequency_penalty() {
+            items.push(("frequency_penalty", frequency_penalty.to_string()));
+        }
+        if let Some(presence_penalty) = self.presence_penalty() {
+            items.push(("presence_penalty", presence_penalty.to_string()));
         }
 
         if let Some(use_tools) = self.use_tools() {
@@ -271,6 +287,8 @@ impl Session {
         self.model_id = role.model().id();
         self.temperature = role.temperature();
         self.top_p = role.top_p();
+        self.frequency_penalty = role.frequency_penalty();
+        self.presence_penalty = role.presence_penalty();
         self.use_tools = role.use_tools();
         self.model = role.model().clone();
         self.role_name = convert_option_string(role.name());
@@ -577,6 +595,14 @@ impl RoleLike for Session {
         self.top_p
     }
 
+    fn frequency_penalty(&self) -> Option<f64> {
+        self.frequency_penalty
+    }
+
+    fn presence_penalty(&self) -> Option<f64> {
+        self.presence_penalty
+    }
+
     fn use_tools(&self) -> Option<String> {
         self.use_tools.clone()
     }
@@ -600,6 +626,20 @@ impl RoleLike for Session {
     fn set_top_p(&mut self, value: Option<f64>) {
         if self.top_p != value {
             self.top_p = value;
+            self.dirty = true;
+        }
+    }
+
+    fn set_frequency_penalty(&mut self, value: Option<f64>) {
+        if self.frequency_penalty != value {
+            self.frequency_penalty = value;
+            self.dirty = true;
+        }
+    }
+
+    fn set_presence_penalty(&mut self, value: Option<f64>) {
+        if self.presence_penalty != value {
+            self.presence_penalty = value;
             self.dirty = true;
         }
     }

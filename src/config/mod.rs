@@ -11,8 +11,9 @@ pub use self::role::{
 use self::session::Session;
 
 use crate::client::{
-    create_client_config, list_client_types, list_models, ClientConfig, MessageContentToolCalls,
-    Model, ModelType, ProviderModels, OPENAI_COMPATIBLE_PROVIDERS,
+    create_client_config, list_client_types, list_models, model_data_from_names, ClientConfig,
+    MessageContentToolCalls, Model, ModelType, OpenAICompatibleClient, ProviderModels,
+    OPENAI_COMPATIBLE_PROVIDERS,
 };
 use crate::function::{FunctionDeclaration, Functions, ToolResult};
 use crate::rag::Rag;
@@ -96,7 +97,7 @@ const RIGHT_PROMPT: &str = "{color.purple}{?session {?consume_tokens {consume_to
 
 static EDITOR: OnceLock<Option<String>> = OnceLock::new();
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(default)]
 pub struct Config {
     #[serde(rename(serialize = "model", deserialize = "model"))]
@@ -104,6 +105,8 @@ pub struct Config {
     pub model_id: String,
     pub temperature: Option<f64>,
     pub top_p: Option<f64>,
+    pub frequency_penalty: Option<f64>,
+    pub presence_penalty: Option<f64>,
 
     pub dry_run: bool,
     pub stream: bool,
@@ -180,6 +183,8 @@ impl Default for Config {
             model_id: Default::default(),
             temperature: None,
             top_p: None,
+            frequency_penalty: None,
+            presence_penalty: None,
 
             dry_run: false,
             stream: true,
@@ -536,6 +541,8 @@ impl Config {
                 &self.model,
                 self.temperature,
                 self.top_p,
+                self.frequency_penalty,
+                self.presence_penalty,
                 self.use_tools.clone(),
             );
             role
@@ -641,6 +648,14 @@ impl Config {
             "top_p" => {
                 let value = parse_value(value)?;
                 config.write().set_top_p(value);
+            }
+            "frequency_penalty" => {
+                let value = parse_value(value)?;
+                config.write().set_frequency_penalty(value);
+            }
+            "presence_penalty" => {
+                let value = parse_value(value)?;
+                config.write().set_presence_penalty(value);
             }
             "use_tools" => {
                 let value = parse_value(value)?;
@@ -774,6 +789,20 @@ impl Config {
         match self.role_like_mut() {
             Some(role_like) => role_like.set_top_p(value),
             None => self.top_p = value,
+        }
+    }
+
+    pub fn set_frequency_penalty(&mut self, value: Option<f64>) {
+        match self.role_like_mut() {
+            Some(role_like) => role_like.set_frequency_penalty(value),
+            None => self.frequency_penalty = value,
+        }
+    }
+
+    pub fn set_presence_penalty(&mut self, value: Option<f64>) {
+        match self.role_like_mut() {
+            Some(role_like) => role_like.set_presence_penalty(value),
+            None => self.presence_penalty = value,
         }
     }
 
@@ -940,6 +969,12 @@ impl Config {
                 }
                 if role.top_p().is_none() {
                     role.set_top_p(self.top_p);
+                }
+                if role.frequency_penalty().is_none() {
+                    role.set_frequency_penalty(self.frequency_penalty);
+                }
+                if role.presence_penalty().is_none() {
+                    role.set_presence_penalty(self.presence_penalty);
                 }
             }
         }
@@ -1888,6 +1923,65 @@ impl Config {
         Ok(())
     }
 
+    pub async fn refresh_client_models(abort_signal: AbortSignal) -> Result<()> {
+        let config_path = Self::config_file();
+        let mut config = Self::load_from_file(&config_path)?;
+        let mut updated = false;
+
+        for client in config.clients.iter_mut() {
+            let ClientConfig::OpenAICompatibleConfig(client_config) = client else {
+                continue;
+            };
+
+            let client_name = OpenAICompatibleClient::name(client_config).to_string();
+            let api_base = client_config.api_base.clone().or_else(|| {
+                OPENAI_COMPATIBLE_PROVIDERS.iter().find_map(|(name, base)| {
+                    (client_name.starts_with(name)).then(|| base.to_string())
+                })
+            });
+
+            let api_base = if let Some(api_base) = api_base {
+                api_base
+            } else {
+                eprintln!("✗ Skip {client_name}: missing api_base");
+                continue;
+            };
+
+            let api_key = client_config.api_key.clone().or_else(|| {
+                let env_name = format!("{}_API_KEY", client_name).to_ascii_uppercase();
+                std::env::var(env_name).ok()
+            });
+
+            let spinner_message = format!("Fetching models for {client_name}");
+            match abortable_run_with_spinner(
+                fetch_models(&api_base, api_key.as_deref()),
+                &spinner_message,
+                abort_signal.clone(),
+            )
+            .await
+            {
+                Ok(model_names) if !model_names.is_empty() => {
+                    client_config.models = model_data_from_names(&model_names);
+                    updated = true;
+                }
+                Ok(_) => eprintln!("✗ Skip {client_name}: no models returned"),
+                Err(err) => eprintln!("✗ Fetch models failed for {client_name}: {err}"),
+            }
+        }
+
+        if !updated {
+            println!("No client models were updated.");
+            return Ok(());
+        }
+
+        config.save_to_file(&config_path)?;
+        println!(
+            "✓ Updated client models and saved to '{}'.",
+            config_path.display()
+        );
+        Ok(())
+    }
+
     pub fn loal_models_override() -> Result<Vec<ProviderModels>> {
         let model_override_path = Self::models_override_file();
         let err = || {
@@ -2222,6 +2316,14 @@ impl Config {
         Ok(config)
     }
 
+    fn save_to_file(&self, config_path: &Path) -> Result<()> {
+        let content = serde_yaml::to_string(self).with_context(|| "Failed to serialize config")?;
+        ensure_parent_exists(config_path)?;
+        std::fs::write(config_path, content)
+            .with_context(|| format!("Failed to write to '{}'", config_path.display()))?;
+        Ok(())
+    }
+
     fn load_dynamic(model_id: &str) -> Result<Self> {
         let provider = match model_id.split_once(':') {
             Some((v, _)) => v,
@@ -2254,6 +2356,12 @@ impl Config {
         }
         if let Some(v) = read_env_value::<f64>(&get_env_name("top_p")) {
             self.top_p = v;
+        }
+        if let Some(v) = read_env_value::<f64>(&get_env_name("frequency_penalty")) {
+            self.frequency_penalty = v;
+        }
+        if let Some(v) = read_env_value::<f64>(&get_env_name("presence_penalty")) {
+            self.presence_penalty = v;
         }
 
         if let Some(Some(v)) = read_env_bool(&get_env_name("dry_run")) {

@@ -4,12 +4,12 @@ use crate::utils::strip_think_tag;
 
 use anyhow::{bail, Context, Result};
 use reqwest::RequestBuilder;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 const API_BASE: &str = "https://api.anthropic.com/v1";
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ClaudeConfig {
     pub name: Option<String>,
     pub api_key: Option<String>,
@@ -161,6 +161,8 @@ pub fn claude_build_chat_completions_body(
         mut messages,
         temperature,
         top_p,
+        frequency_penalty: _,
+        presence_penalty: _,
         functions,
         stream,
     } = data;

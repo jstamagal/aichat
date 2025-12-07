@@ -4,12 +4,12 @@ use crate::utils::strip_think_tag;
 
 use anyhow::{bail, Context, Result};
 use reqwest::RequestBuilder;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 const API_BASE: &str = "https://api.openai.com/v1";
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct OpenAIConfig {
     pub name: Option<String>,
     pub api_key: Option<String>,
@@ -228,6 +228,8 @@ pub fn openai_build_chat_completions_body(data: ChatCompletionsData, model: &Mod
         messages,
         temperature,
         top_p,
+        frequency_penalty,
+        presence_penalty,
         functions,
         stream,
     } = data;
@@ -325,6 +327,12 @@ pub fn openai_build_chat_completions_body(data: ChatCompletionsData, model: &Mod
     }
     if let Some(v) = top_p {
         body["top_p"] = v.into();
+    }
+    if let Some(v) = frequency_penalty {
+        body["frequency_penalty"] = v.into();
+    }
+    if let Some(v) = presence_penalty {
+        body["presence_penalty"] = v.into();
     }
     if stream {
         body["stream"] = true.into();

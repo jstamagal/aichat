@@ -10,7 +10,7 @@ macro_rules! register_client {
             use self::$module::$config;
         )+
 
-        #[derive(Debug, Clone, serde::Deserialize)]
+        #[derive(Debug, Clone, serde::Deserialize, serde::Serialize)]
         #[serde(tag = "type")]
         pub enum ClientConfig {
             $(

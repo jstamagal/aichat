@@ -247,14 +247,13 @@ async fn start_interactive(config: &GlobalConfig) -> Result<()> {
 fn is_running_as_root() -> bool {
     #[cfg(unix)]
     {
-        // Check if UID is 0 (root) or if USER/SUDO_USER environment variables indicate root
+        // Check if UID is 0 (root)
         use std::os::unix::fs::MetadataExt;
         if let Ok(metadata) = std::fs::metadata("/proc/self") {
             metadata.uid() == 0
         } else {
-            // Fallback: check environment variables
-            std::env::var("USER").unwrap_or_default() == "root" ||
-            std::env::var("SUDO_USER").is_ok()
+            // Fallback: check USER environment variable only
+            std::env::var("USER").unwrap_or_default() == "root"
         }
     }
     #[cfg(not(unix))]
@@ -283,9 +282,9 @@ fn is_dangerous_command(cmd: &str) -> bool {
         "fdisk",
         "parted",
         "> /dev/",
-        "chmod -r 777",
+        "chmod -R 777",
         "chmod 777",
-        "chown -r",
+        "chown -R",
         "systemctl stop",
         "systemctl disable",
         "iptables -f",

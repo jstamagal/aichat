@@ -45,6 +45,7 @@ async fn main() -> Result<()> {
     };
     let info_flag = cli.info
         || cli.sync_models
+        || cli.refresh_models
         || cli.list_models
         || cli.list_roles
         || cli.list_agents
@@ -66,6 +67,10 @@ async fn run(config: GlobalConfig, cli: Cli, text: Option<String>) -> Result<()>
     if cli.sync_models {
         let url = config.read().sync_models_url();
         return Config::sync_models(&url, abort_signal.clone()).await;
+    }
+
+    if cli.refresh_models {
+        return Config::refresh_client_models(abort_signal.clone()).await;
     }
 
     if cli.list_models {

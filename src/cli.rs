@@ -63,6 +63,9 @@ pub struct Cli {
     /// Sync models updates
     #[clap(long)]
     pub sync_models: bool,
+    /// Refresh model lists for configured clients
+    #[clap(long)]
+    pub refresh_models: bool,
     /// List all available chat models
     #[clap(long)]
     pub list_models: bool,

@@ -14,7 +14,7 @@ use inquire::{
     list_option::ListOption, required, validator::Validation, MultiSelect, Select, Text,
 };
 use reqwest::{Client as ReqwestClient, RequestBuilder};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::LazyLock;
 use std::time::Duration;
@@ -28,7 +28,7 @@ pub static ALL_PROVIDER_MODELS: LazyLock<Vec<ProviderModels>> = LazyLock::new(||
         .unwrap_or_else(|| serde_yaml::from_str(MODELS_YAML).unwrap())
 });
 
-static EMBEDDING_MODEL_RE: LazyLock<Regex> = LazyLock::new(|| {
+pub static EMBEDDING_MODEL_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"((^|/)(bge-|e5-|uae-|gte-|text-)|embed|multilingual|minilm)").unwrap()
 });
 
@@ -197,13 +197,13 @@ impl Default for ClientConfig {
     }
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct ExtraConfig {
     pub proxy: Option<String>,
     pub connect_timeout: Option<u64>,
 }
 
-#[derive(Debug, Clone, Deserialize, Default)]
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
 pub struct RequestPatch {
     pub chat_completions: Option<ApiPatch>,
     pub embeddings: Option<ApiPatch>,
@@ -282,8 +282,31 @@ pub struct ChatCompletionsData {
     pub messages: Vec<Message>,
     pub temperature: Option<f64>,
     pub top_p: Option<f64>,
+    pub frequency_penalty: Option<f64>,
+    pub presence_penalty: Option<f64>,
     pub functions: Option<Vec<FunctionDeclaration>>,
     pub stream: bool,
+}
+
+pub fn model_data_from_names(model_names: &[String]) -> Vec<ModelData> {
+    model_names
+        .iter()
+        .map(|name| {
+            let mut data = ModelData::new(name);
+            let lower_name = name.to_lowercase();
+            if lower_name.contains("rank") {
+                data.model_type = "reranker".into();
+            } else if let Ok(true) = EMBEDDING_MODEL_RE.is_match(&lower_name) {
+                data.model_type = "embedding".into();
+                data.default_chunk_size = Some(1000);
+                data.max_batch_size = Some(100);
+            }
+            if name.contains("vision") {
+                data.supports_vision = true;
+            }
+            data
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, Default)]
@@ -609,33 +632,9 @@ async fn set_client_models_config(client_config: &mut Value, client: &str) -> Re
     if model_names.is_empty() {
         bail!("No models");
     }
-    let models: Vec<Value> = model_names
+    let models: Vec<Value> = model_data_from_names(&model_names)
         .iter()
-        .map(|v| {
-            let l = v.to_lowercase();
-            if l.contains("rank") {
-                json!({
-                    "name": v,
-                    "type": "reranker",
-                })
-            } else if let Ok(true) = EMBEDDING_MODEL_RE.is_match(&l) {
-                json!({
-                    "name": v,
-                    "type": "embedding",
-                    "default_chunk_size": 1000,
-                    "max_batch_size": 100
-                })
-            } else if v.contains("vision") {
-                json!({
-                    "name": v,
-                    "supports_vision": true
-                })
-            } else {
-                json!({
-                    "name": v,
-                })
-            }
-        })
+        .map(|data| serde_json::to_value(data).unwrap_or_default())
         .collect();
     client_config["models"] = models.into();
     let model_name = select_model(model_names)?;

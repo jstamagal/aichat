@@ -316,6 +316,8 @@ impl Server {
             messages,
             temperature,
             top_p,
+            frequency_penalty: None,
+            presence_penalty: None,
             functions,
             stream,
         };

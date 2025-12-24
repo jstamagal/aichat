@@ -239,11 +239,17 @@ impl Input {
         patch_messages(&mut messages, model);
         model.guard_max_input_tokens(&messages)?;
         let (temperature, top_p) = (self.role().temperature(), self.role().top_p());
+        let (frequency_penalty, presence_penalty) = (
+            self.role().frequency_penalty(),
+            self.role().presence_penalty(),
+        );
         let functions = self.config.read().select_functions(self.role());
         Ok(ChatCompletionsData {
             messages,
             temperature,
             top_p,
+            frequency_penalty,
+            presence_penalty,
             functions,
             stream,
         })

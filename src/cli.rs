@@ -48,6 +48,15 @@ pub struct Cli {
     /// Output code only
     #[clap(short = 'c', long)]
     pub code: bool,
+    /// Convert output to JSON format
+    #[clap(long)]
+    pub json: bool,
+    /// Convert output to YAML format
+    #[clap(long)]
+    pub yaml: bool,
+    /// Output plain text without markdown rendering
+    #[clap(long)]
+    pub plain: bool,
     /// Include files, directories, or URLs
     #[clap(short = 'f', long, value_name = "FILE")]
     pub file: Vec<String>,

@@ -29,7 +29,7 @@ use clap::Parser;
 use inquire::Text;
 use parking_lot::RwLock;
 use simplelog::{format_description, ConfigBuilder, LevelFilter, SimpleLogger, WriteLogger};
-use std::{env, process, sync::Arc};
+use std::{env, process, sync::{Arc, LazyLock}};
 use serde_json::json;
 use fancy_regex::Regex;
 
@@ -41,6 +41,15 @@ enum OutputFormat {
     Yaml,
     Plain,
 }
+
+// Compile regex patterns once for performance
+static CODE_BLOCK_STRIP_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"```[\s\S]*?```").unwrap());
+static INLINE_CODE_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"`([^`]+)`").unwrap());
+static BOLD_ITALIC_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\*\*\*(.+?)\*\*\*|___(.+?)___").unwrap());
+static BOLD_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\*\*(.+?)\*\*|__(.+?)__").unwrap());
+static ITALIC_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\*(.+?)\*|_(.+?)_").unwrap());
+static HEADER_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^#{1,6}\s+").unwrap());
+static LINK_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[([^\]]+)\]\([^\)]+\)").unwrap());
 
 fn convert_output_format(text: &str, format: OutputFormat) -> Result<String> {
     match format {
@@ -69,8 +78,7 @@ fn strip_markdown(text: &str) -> String {
     let mut result = text.to_string();
     
     // Remove code blocks
-    let code_block_re = Regex::new(r"```[\s\S]*?```").unwrap();
-    result = code_block_re.replace_all(&result, |caps: &fancy_regex::Captures| {
+    result = CODE_BLOCK_STRIP_RE.replace_all(&result, |caps: &fancy_regex::Captures| {
         // Extract just the code content
         let block = caps.get(0).unwrap().as_str();
         let lines: Vec<&str> = block.lines().collect();
@@ -82,37 +90,31 @@ fn strip_markdown(text: &str) -> String {
     }).to_string();
     
     // Remove inline code
-    let inline_code_re = Regex::new(r"`([^`]+)`").unwrap();
-    result = inline_code_re.replace_all(&result, "$1").to_string();
+    result = INLINE_CODE_RE.replace_all(&result, "$1").to_string();
     
     // Remove bold/italic
-    let bold_italic_re = Regex::new(r"\*\*\*(.+?)\*\*\*|___(.+?)___").unwrap();
-    result = bold_italic_re.replace_all(&result, |caps: &fancy_regex::Captures| {
+    result = BOLD_ITALIC_RE.replace_all(&result, |caps: &fancy_regex::Captures| {
         caps.get(1).or_else(|| caps.get(2)).unwrap().as_str().to_string()
     }).to_string();
     
     // Remove bold
-    let bold_re = Regex::new(r"\*\*(.+?)\*\*|__(.+?)__").unwrap();
-    result = bold_re.replace_all(&result, |caps: &fancy_regex::Captures| {
+    result = BOLD_RE.replace_all(&result, |caps: &fancy_regex::Captures| {
         caps.get(1).or_else(|| caps.get(2)).unwrap().as_str().to_string()
     }).to_string();
     
     // Remove italic
-    let italic_re = Regex::new(r"\*(.+?)\*|_(.+?)_").unwrap();
-    result = italic_re.replace_all(&result, |caps: &fancy_regex::Captures| {
+    result = ITALIC_RE.replace_all(&result, |caps: &fancy_regex::Captures| {
         caps.get(1).or_else(|| caps.get(2)).unwrap().as_str().to_string()
     }).to_string();
     
     // Remove headers
-    let header_re = Regex::new(r"^#{1,6}\s+").unwrap();
     result = result.lines()
-        .map(|line| header_re.replace(line, "").to_string())
+        .map(|line| HEADER_RE.replace(line, "").to_string())
         .collect::<Vec<_>>()
         .join("\n");
     
     // Remove links but keep text
-    let link_re = Regex::new(r"\[([^\]]+)\]\([^\)]+\)").unwrap();
-    result = link_re.replace_all(&result, "$1").to_string();
+    result = LINK_RE.replace_all(&result, "$1").to_string();
     
     result
 }
@@ -310,12 +312,14 @@ async fn start_directive(
 ) -> Result<()> {
     let client = input.create_client()?;
     let extract_code = !*IS_STDOUT_TERMINAL && output_format == OutputFormat::Code;
-    let disable_stream = !*IS_STDOUT_TERMINAL && output_format != OutputFormat::Default;
+    let requires_full_output = output_format != OutputFormat::Default;
     config.write().before_chat_completion(&input)?;
-    let (mut output, tool_results) = if !input.stream() || extract_code || disable_stream {
+    
+    let (mut output, tool_results) = if !input.stream() || extract_code || requires_full_output {
+        // Use non-streaming mode for format conversion (need complete output)
         call_chat_completions(
             &input,
-            output_format == OutputFormat::Default,
+            false,  // Don't print yet - we'll handle printing after format conversion
             extract_code,
             client.as_ref(),
             abort_signal.clone(),
@@ -325,10 +329,23 @@ async fn start_directive(
         call_chat_completions_streaming(&input, client.as_ref(), abort_signal.clone()).await?
     };
     
-    // Apply format conversion
-    if !output.is_empty() && output_format != OutputFormat::Default && output_format != OutputFormat::Code {
-        output = convert_output_format(&output, output_format)?;
-        println!("{}", output);
+    // Apply format conversion and print
+    if !output.is_empty() {
+        match output_format {
+            OutputFormat::Default => {
+                // Default: use markdown rendering
+                config.read().print_markdown(&output)?;
+            }
+            OutputFormat::Code => {
+                // Code mode already extracted in call_chat_completions
+                println!("{}", output);
+            }
+            _ => {
+                // JSON, YAML, or Plain: convert and print
+                output = convert_output_format(&output, output_format)?;
+                println!("{}", output);
+            }
+        }
     }
     
     config
@@ -497,4 +514,68 @@ fn setup_logger(is_serve: bool) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_convert_output_format_json() {
+        let text = "Hello, World!";
+        let result = convert_output_format(text, OutputFormat::Json).unwrap();
+        assert!(result.contains("\"output\""));
+        assert!(result.contains("Hello, World!"));
+    }
+
+    #[test]
+    fn test_convert_output_format_yaml() {
+        let text = "Hello, World!";
+        let result = convert_output_format(text, OutputFormat::Yaml).unwrap();
+        assert!(result.contains("output:"));
+        assert!(result.contains("Hello, World!"));
+    }
+
+    #[test]
+    fn test_strip_markdown_bold() {
+        let text = "This is **bold** text";
+        let result = strip_markdown(text);
+        assert_eq!(result, "This is bold text");
+    }
+
+    #[test]
+    fn test_strip_markdown_italic() {
+        let text = "This is *italic* text";
+        let result = strip_markdown(text);
+        assert_eq!(result, "This is italic text");
+    }
+
+    #[test]
+    fn test_strip_markdown_headers() {
+        let text = "# Header 1\n## Header 2\nText";
+        let result = strip_markdown(text);
+        assert_eq!(result, "Header 1\nHeader 2\nText");
+    }
+
+    #[test]
+    fn test_strip_markdown_links() {
+        let text = "Check [this link](https://example.com)";
+        let result = strip_markdown(text);
+        assert_eq!(result, "Check this link");
+    }
+
+    #[test]
+    fn test_strip_markdown_inline_code() {
+        let text = "Use `println!()` to print";
+        let result = strip_markdown(text);
+        assert_eq!(result, "Use println!() to print");
+    }
+
+    #[test]
+    fn test_strip_markdown_code_blocks() {
+        let text = "Code:\n```python\ndef hello():\n    print('hi')\n```\nDone";
+        let result = strip_markdown(text);
+        assert!(result.contains("def hello()"));
+        assert!(!result.contains("```"));
+    }
 }

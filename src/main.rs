@@ -183,11 +183,6 @@ async fn run(config: GlobalConfig, cli: Cli, text: Option<String>) -> Result<()>
         shell_execute(&config, &SHELL, input, cli.yolo, abort_signal.clone()).await?;
         return Ok(());
     }
-    if cli.distrobox && !is_repl {
-        let input = create_input(&config, text, &cli.file, abort_signal.clone()).await?;
-        shell_execute(&config, &SHELL, input, cli.yolo, abort_signal.clone()).await?;
-        return Ok(());
-    }
     config.write().apply_prelude()?;
     match is_repl {
         false => {
@@ -272,6 +267,13 @@ fn is_running_as_root() -> bool {
 
 fn is_dangerous_command(cmd: &str) -> bool {
     let cmd_lower = cmd.to_lowercase();
+    let cmd_trimmed = cmd.trim();
+    
+    // Skip if command is just echoing or in a comment
+    if cmd_trimmed.starts_with("echo ") || cmd_trimmed.starts_with("#") {
+        return false;
+    }
+    
     let dangerous_patterns = [
         "rm -rf",
         "rm -fr",
@@ -303,6 +305,13 @@ fn is_dangerous_command(cmd: &str) -> bool {
 
 fn is_extremely_dangerous_command(cmd: &str) -> bool {
     let cmd_lower = cmd.to_lowercase();
+    let cmd_trimmed = cmd.trim();
+    
+    // Skip if command is just echoing or in a comment
+    if cmd_trimmed.starts_with("echo ") || cmd_trimmed.starts_with("#") {
+        return false;
+    }
+    
     let extremely_dangerous_patterns = [
         "rm -rf /",
         "rm -fr /",
@@ -322,9 +331,10 @@ fn is_extremely_dangerous_command(cmd: &str) -> bool {
         "sgdisk",
         "shred /dev/",
         ":(){:|:&};:",  // fork bomb
-        "chmod -r 777 /",
+        ":(){ :|:& };:",  // fork bomb with spaces
+        "chmod -R 777 /",
         "chmod 777 /",
-        "chown -r root:root /",
+        "chown -R root:root /",
     ];
     
     extremely_dangerous_patterns.iter().any(|pattern| cmd_lower.contains(pattern))
@@ -398,7 +408,7 @@ async fn shell_execute(
                 }
             }
             _ => {
-                // -yyy: Full-retard yolo mode - no warnings, just YOLO
+                // -yyy: Full yolo mode - executes all commands without restrictions
                 if is_root && is_extremely_dangerous {
                     eprintln!("{}", color_text("💀💀💀 EXTREMELY DANGEROUS COMMAND AS ROOT 💀💀💀", nu_ansi_term::Color::Red));
                     eprintln!("{}", color_text("You are about to potentially destroy your system. God help you.", nu_ansi_term::Color::Red));

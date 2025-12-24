@@ -30,6 +30,92 @@ use inquire::Text;
 use parking_lot::RwLock;
 use simplelog::{format_description, ConfigBuilder, LevelFilter, SimpleLogger, WriteLogger};
 use std::{env, process, sync::Arc};
+use serde_json::json;
+use fancy_regex::Regex;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum OutputFormat {
+    Default,
+    Code,
+    Json,
+    Yaml,
+    Plain,
+}
+
+fn convert_output_format(text: &str, format: OutputFormat) -> Result<String> {
+    match format {
+        OutputFormat::Json => {
+            let output = json!({
+                "output": text
+            });
+            Ok(serde_json::to_string_pretty(&output)?)
+        }
+        OutputFormat::Yaml => {
+            let output = json!({
+                "output": text
+            });
+            Ok(serde_yaml::to_string(&output)?)
+        }
+        OutputFormat::Plain => {
+            // Strip markdown formatting for plain text
+            Ok(strip_markdown(text))
+        }
+        _ => Ok(text.to_string()),
+    }
+}
+
+fn strip_markdown(text: &str) -> String {
+    // Simple markdown stripping - remove common markdown syntax
+    let mut result = text.to_string();
+    
+    // Remove code blocks
+    let code_block_re = Regex::new(r"```[\s\S]*?```").unwrap();
+    result = code_block_re.replace_all(&result, |caps: &fancy_regex::Captures| {
+        // Extract just the code content
+        let block = caps.get(0).unwrap().as_str();
+        let lines: Vec<&str> = block.lines().collect();
+        if lines.len() > 2 {
+            lines[1..lines.len()-1].join("\n")
+        } else {
+            String::new()
+        }
+    }).to_string();
+    
+    // Remove inline code
+    let inline_code_re = Regex::new(r"`([^`]+)`").unwrap();
+    result = inline_code_re.replace_all(&result, "$1").to_string();
+    
+    // Remove bold/italic
+    let bold_italic_re = Regex::new(r"\*\*\*(.+?)\*\*\*|___(.+?)___").unwrap();
+    result = bold_italic_re.replace_all(&result, |caps: &fancy_regex::Captures| {
+        caps.get(1).or_else(|| caps.get(2)).unwrap().as_str().to_string()
+    }).to_string();
+    
+    // Remove bold
+    let bold_re = Regex::new(r"\*\*(.+?)\*\*|__(.+?)__").unwrap();
+    result = bold_re.replace_all(&result, |caps: &fancy_regex::Captures| {
+        caps.get(1).or_else(|| caps.get(2)).unwrap().as_str().to_string()
+    }).to_string();
+    
+    // Remove italic
+    let italic_re = Regex::new(r"\*(.+?)\*|_(.+?)_").unwrap();
+    result = italic_re.replace_all(&result, |caps: &fancy_regex::Captures| {
+        caps.get(1).or_else(|| caps.get(2)).unwrap().as_str().to_string()
+    }).to_string();
+    
+    // Remove headers
+    let header_re = Regex::new(r"^#{1,6}\s+").unwrap();
+    result = result.lines()
+        .map(|line| header_re.replace(line, "").to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    
+    // Remove links but keep text
+    let link_re = Regex::new(r"\[([^\]]+)\]\([^\)]+\)").unwrap();
+    result = link_re.replace_all(&result, "$1").to_string();
+    
+    result
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -63,6 +149,24 @@ async fn main() -> Result<()> {
 
 async fn run(config: GlobalConfig, cli: Cli, text: Option<String>) -> Result<()> {
     let abort_signal = create_abort_signal();
+
+    // Determine output format
+    let format_flags = [cli.code, cli.json, cli.yaml, cli.plain];
+    let format_count = format_flags.iter().filter(|&&f| f).count();
+    if format_count > 1 {
+        bail!("Only one output format flag can be specified at a time (--code, --json, --yaml, --plain)");
+    }
+    let output_format = if cli.code {
+        OutputFormat::Code
+    } else if cli.json {
+        OutputFormat::Json
+    } else if cli.yaml {
+        OutputFormat::Yaml
+    } else if cli.plain {
+        OutputFormat::Plain
+    } else {
+        OutputFormat::Default
+    };
 
     if cli.sync_models {
         let url = config.read().sync_models_url();
@@ -186,7 +290,7 @@ async fn run(config: GlobalConfig, cli: Cli, text: Option<String>) -> Result<()>
         false => {
             let mut input = create_input(&config, text, &cli.file, abort_signal.clone()).await?;
             input.use_embeddings(abort_signal.clone()).await?;
-            start_directive(&config, input, cli.code, abort_signal).await
+            start_directive(&config, input, output_format, abort_signal).await
         }
         true => {
             if !*IS_STDOUT_TERMINAL {
@@ -201,16 +305,17 @@ async fn run(config: GlobalConfig, cli: Cli, text: Option<String>) -> Result<()>
 async fn start_directive(
     config: &GlobalConfig,
     input: Input,
-    code_mode: bool,
+    output_format: OutputFormat,
     abort_signal: AbortSignal,
 ) -> Result<()> {
     let client = input.create_client()?;
-    let extract_code = !*IS_STDOUT_TERMINAL && code_mode;
+    let extract_code = !*IS_STDOUT_TERMINAL && output_format == OutputFormat::Code;
+    let disable_stream = !*IS_STDOUT_TERMINAL && output_format != OutputFormat::Default;
     config.write().before_chat_completion(&input)?;
-    let (output, tool_results) = if !input.stream() || extract_code {
+    let (mut output, tool_results) = if !input.stream() || extract_code || disable_stream {
         call_chat_completions(
             &input,
-            true,
+            output_format == OutputFormat::Default,
             extract_code,
             client.as_ref(),
             abort_signal.clone(),
@@ -219,6 +324,13 @@ async fn start_directive(
     } else {
         call_chat_completions_streaming(&input, client.as_ref(), abort_signal.clone()).await?
     };
+    
+    // Apply format conversion
+    if !output.is_empty() && output_format != OutputFormat::Default && output_format != OutputFormat::Code {
+        output = convert_output_format(&output, output_format)?;
+        println!("{}", output);
+    }
+    
     config
         .write()
         .after_chat_completion(&input, &output, &tool_results)?;
@@ -227,7 +339,7 @@ async fn start_directive(
         start_directive(
             config,
             input.merge_tool_results(output, tool_results),
-            code_mode,
+            output_format,
             abort_signal,
         )
         .await?;

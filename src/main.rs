@@ -18,7 +18,7 @@ use crate::client::{
 };
 use crate::config::{
     ensure_parent_exists, list_agents, load_env_file, macro_execute, Config, GlobalConfig, Input,
-    WorkingMode, CODE_ROLE, EXPLAIN_SHELL_ROLE, SHELL_ROLE, TEMP_SESSION_NAME,
+    WorkingMode, CODE_ROLE, DISTROBOX_ROLE, EXPLAIN_SHELL_ROLE, SHELL_ROLE, TEMP_SESSION_NAME,
 };
 use crate::render::render_error;
 use crate::repl::Repl;
@@ -26,7 +26,7 @@ use crate::utils::*;
 
 use anyhow::{bail, Result};
 use clap::Parser;
-use inquire::Text;
+use inquire::{Confirm, Text};
 use parking_lot::RwLock;
 use simplelog::{format_description, ConfigBuilder, LevelFilter, SimpleLogger, WriteLogger};
 use std::{env, process, sync::{Arc, LazyLock}};
@@ -232,6 +232,8 @@ async fn run(config: GlobalConfig, cli: Cli, text: Option<String>) -> Result<()>
             config.write().use_prompt(prompt)?;
         } else if let Some(name) = &cli.role {
             config.write().use_role(name)?;
+        } else if cli.distrobox {
+            config.write().use_role(DISTROBOX_ROLE)?;
         } else if cli.execute {
             config.write().use_role(SHELL_ROLE)?;
         } else if cli.code {
@@ -284,7 +286,7 @@ async fn run(config: GlobalConfig, cli: Cli, text: Option<String>) -> Result<()>
     }
     if cli.execute && !is_repl {
         let input = create_input(&config, text, &cli.file, abort_signal.clone()).await?;
-        shell_execute(&config, &SHELL, input, abort_signal.clone()).await?;
+        shell_execute(&config, &SHELL, input, cli.yolo, abort_signal.clone()).await?;
         return Ok(());
     }
     config.write().apply_prelude()?;
@@ -371,11 +373,110 @@ async fn start_interactive(config: &GlobalConfig) -> Result<()> {
     repl.run().await
 }
 
+fn is_running_as_root() -> bool {
+    #[cfg(unix)]
+    {
+        // Check if UID is 0 (root)
+        use std::os::unix::fs::MetadataExt;
+        if let Ok(metadata) = std::fs::metadata("/proc/self") {
+            metadata.uid() == 0
+        } else {
+            // Fallback: check USER environment variable only
+            std::env::var("USER").unwrap_or_default() == "root"
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        // On Windows, check if running as Administrator
+        // For simplicity, we'll return false on non-Unix systems
+        false
+    }
+}
+
+fn is_dangerous_command(cmd: &str) -> bool {
+    let cmd_lower = cmd.to_lowercase();
+    let cmd_trimmed = cmd.trim();
+    
+    // Skip if command is just echoing or in a comment
+    if cmd_trimmed.starts_with("echo ") || cmd_trimmed.starts_with("#") {
+        return false;
+    }
+    
+    let dangerous_patterns = [
+        "rm -rf",
+        "rm -fr",
+        "rm --recursive --force",
+        "dd if=",
+        "mkfs.",
+        "fdisk",
+        "parted",
+        "> /dev/sd",
+        "> /dev/nvme",
+        "chmod -R 777",
+        "chmod 777",
+        "chown -R",
+        "systemctl stop",
+        "systemctl disable",
+        "iptables -F",
+        "iptables -X",
+        "iptables -P",
+        "shutdown",
+        "reboot",
+        "halt",
+        "poweroff",
+        "init 0",
+        "init 6",
+        "kill -9",
+        "killall",
+        "pkill -9",
+    ];
+    
+    dangerous_patterns.iter().any(|pattern| cmd_lower.contains(pattern))
+}
+
+fn is_extremely_dangerous_command(cmd: &str) -> bool {
+    let cmd_lower = cmd.to_lowercase();
+    let cmd_trimmed = cmd.trim();
+    
+    // Skip if command is just echoing or in a comment
+    if cmd_trimmed.starts_with("echo ") || cmd_trimmed.starts_with("#") {
+        return false;
+    }
+    
+    let extremely_dangerous_patterns = [
+        "rm -rf /",
+        "rm -fr /",
+        "rm / -rf",
+        "rm / -fr",
+        "rm --recursive --force /",
+        "rm -rf /*",
+        "rm -fr /*",
+        "dd if=/dev/zero of=/dev/",
+        "dd if=/dev/urandom of=/dev/",
+        "mkfs.ext",
+        "mkfs.xfs",
+        "mkfs.btrfs",
+        "> /dev/sda",
+        "> /dev/nvme",
+        "wipefs",
+        "sgdisk",
+        "shred /dev/",
+        ":(){:|:&};:",  // fork bomb
+        ":(){ :|:& };:",  // fork bomb with spaces
+        "chmod -R 777 /",
+        "chmod 777 /",
+        "chown -R root:root /",
+    ];
+    
+    extremely_dangerous_patterns.iter().any(|pattern| cmd_lower.contains(pattern))
+}
+
 #[async_recursion::async_recursion]
 async fn shell_execute(
     config: &GlobalConfig,
     shell: &Shell,
     mut input: Input,
+    yolo_level: u8,
     abort_signal: AbortSignal,
 ) -> Result<()> {
     let client = input.create_client()?;
@@ -393,6 +494,71 @@ async fn shell_execute(
         config.read().print_markdown(&eval_str)?;
         return Ok(());
     }
+
+    // Yolo mode handling
+    if yolo_level > 0 {
+        let is_root = is_running_as_root();
+        let is_dangerous = is_dangerous_command(&eval_str);
+        let is_extremely_dangerous = is_extremely_dangerous_command(&eval_str);
+        let has_sudo = eval_str.trim_start().starts_with("sudo ");
+
+        match yolo_level {
+            1 => {
+                // -y: Safe yolo mode
+                if is_root {
+                    bail!("🚫 YOLO MODE DENIED: You're running as root. This is incredibly dangerous.\n\
+                          Use -yy if you want to proceed with warnings, or -yyy if you're truly insane.\n\
+                          But seriously, don't run shell commands as root in yolo mode. Create a regular user.");
+                }
+                
+                if has_sudo && is_dangerous {
+                    println!("{}", color_text("⚠️  WARNING: This command uses sudo and looks dangerous!", nu_ansi_term::Color::Red));
+                    println!("{}", color_text(&format!("Command: {}", eval_str.trim()), nu_ansi_term::Color::Yellow));
+                    let confirm = Confirm::new("Are you absolutely sure you want to execute this?")
+                        .with_default(false)
+                        .prompt()?;
+                    if !confirm {
+                        println!("{}", dimmed_text("Execution cancelled."));
+                        return Ok(());
+                    }
+                }
+            }
+            2 => {
+                // -yy: True yolo mode with safety check for extremely dangerous commands as root
+                if is_root && is_extremely_dangerous {
+                    bail!("🚫 COMMAND BLOCKED: This command is extremely dangerous and could destroy your system.\n\
+                          Command: {}\n\
+                          Run with -yyy if you are absolutely positively sure you want to do this.", eval_str.trim());
+                }
+                
+                if is_root {
+                    eprintln!("{}", color_text("🔔 BEEP BEEP BEEP! WARNING: Running as root in yolo mode!", nu_ansi_term::Color::Red));
+                    eprintln!("{}", color_text("This is a terrible idea. You've been warned.", nu_ansi_term::Color::Red));
+                    // Optional: could add actual system beep here if available
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                }
+            }
+            _ => {
+                // -yyy: Full yolo mode - executes all commands without restrictions
+                if is_root && is_extremely_dangerous {
+                    eprintln!("{}", color_text("💀💀💀 EXTREMELY DANGEROUS COMMAND AS ROOT 💀💀💀", nu_ansi_term::Color::Red));
+                    eprintln!("{}", color_text("You are about to potentially destroy your system. God help you.", nu_ansi_term::Color::Red));
+                    std::thread::sleep(std::time::Duration::from_millis(1000));
+                }
+            }
+        }
+
+        // Execute directly in yolo mode
+        println!("{}", color_text(&format!("🚀 YOLO EXECUTING: {}", eval_str.trim()), nu_ansi_term::Color::Cyan));
+        debug!("{} {:?}", shell.cmd, &[&shell.arg, &eval_str]);
+        let code = run_command(&shell.cmd, &[&shell.arg, &eval_str], None)?;
+        if code == 0 && config.read().save_shell_history {
+            let _ = append_to_shell_history(&shell.name, &eval_str, code);
+        }
+        process::exit(code);
+    }
+
+    // Non-yolo mode: interactive prompt
     if *IS_STDOUT_TERMINAL {
         let options = ["execute", "revise", "describe", "copy", "quit"];
         let command = color_text(eval_str.trim(), nu_ansi_term::Color::Rgb(255, 165, 0));
@@ -420,7 +586,7 @@ async fn shell_execute(
                     let revision = Text::new("Enter your revision:").prompt()?;
                     let text = format!("{}\n{revision}", input.text());
                     input.set_text(text);
-                    return shell_execute(config, shell, input, abort_signal.clone()).await;
+                    return shell_execute(config, shell, input, yolo_level, abort_signal.clone()).await;
                 }
                 'd' => {
                     let role = config.read().retrieve_role(EXPLAIN_SHELL_ROLE)?;

@@ -45,6 +45,12 @@ pub struct Cli {
     /// Execute commands in natural language
     #[clap(short = 'e', long)]
     pub execute: bool,
+    /// Yolo mode - execute commands without confirmation. Use -y for safe mode (blocks root, warns on sudo), -yy for root with warning, -yyy for full yolo
+    #[clap(short = 'y', action = clap::ArgAction::Count)]
+    pub yolo: u8,
+    /// Use distrobox/docker/podman mode
+    #[clap(short = 'd', long)]
+    pub distrobox: bool,
     /// Output code only
     #[clap(short = 'c', long)]
     pub code: bool,

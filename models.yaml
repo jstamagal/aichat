@@ -2265,3 +2265,33 @@
       type: reranker
       max_input_tokens: 8000
       input_price: 0.02
+
+# Links:
+#  - https://ollama.com/library
+#  - https://github.com/ollama/ollama/blob/main/docs/api.md
+- provider: ollama
+  models:
+    - name: llama3.3
+      max_input_tokens: 131072
+      supports_function_calling: true
+    - name: llama3.2
+      max_input_tokens: 131072
+      supports_function_calling: true
+    - name: llama3.2-vision
+      max_input_tokens: 131072
+      supports_vision: true
+    - name: qwen2.5
+      max_input_tokens: 131072
+      supports_function_calling: true
+    - name: qwen2.5-coder
+      max_input_tokens: 32768
+      supports_function_calling: true
+    - name: qwq
+      max_input_tokens: 131072
+    - name: deepseek-r1
+      max_input_tokens: 131072
+    - name: nomic-embed-text
+      type: embedding
+      max_tokens_per_chunk: 8192
+      default_chunk_size: 1000
+      max_batch_size: 50

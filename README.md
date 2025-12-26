@@ -163,6 +163,12 @@ AIChat supports custom dark and light themes, which highlight response text and 
 - [Custom REPL Prompt](https://github.com/sigoden/aichat/wiki/Custom-REPL-Prompt)
 - [FAQ](https://github.com/sigoden/aichat/wiki/FAQ)
 
+## Acknowledgements
+
+This fork includes contributions ported from [blob42/aichat-ng](https://github.com/blob42/aichat-ng):
+- Dedicated Ollama API client (native `/api/chat` and `/api/embed` endpoints)
+- REPL path autocompletion for file paths
+
 ## License
 
 Copyright (c) 2023-2025 aichat-developers.

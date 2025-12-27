@@ -1,5 +1,7 @@
 # AIChat: All-in-one LLM CLI Tool
 
+> **Note:** This is a fork of [sigoden/aichat](https://github.com/sigoden/aichat) with additional features and enhancements. See [CHANGELOG.md](CHANGELOG.md) for details on what has changed since the fork.
+
 [![CI](https://github.com/sigoden/aichat/actions/workflows/ci.yaml/badge.svg)](https://github.com/sigoden/aichat/actions/workflows/ci.yaml)
 [![Crates](https://img.shields.io/crates/v/aichat.svg)](https://crates.io/crates/aichat)
 [![Discord](https://img.shields.io/discord/1226737085453701222?label=Discord)](https://discord.gg/mr3ZZUB9hG)
@@ -162,6 +164,23 @@ AIChat supports custom dark and light themes, which highlight response text and 
 - [Custom Theme](https://github.com/sigoden/aichat/wiki/Custom-Theme)
 - [Custom REPL Prompt](https://github.com/sigoden/aichat/wiki/Custom-REPL-Prompt)
 - [FAQ](https://github.com/sigoden/aichat/wiki/FAQ)
+
+## Fork Information
+
+This is a fork of [sigoden/aichat](https://github.com/sigoden/aichat) with the following enhancements:
+
+### New Features
+
+- **Yolo Mode (`-y`, `-yy`, `-yyy`)**: Execute shell commands without confirmation, with safety checks that block root commands and warn on sudo usage
+- **Distrobox Mode (`-d`)**: Execute commands in distrobox/docker/podman containers
+- **Output Format Conversion**: Convert output to JSON (`--json`), YAML (`--yaml`), or plain text (`--plain`)
+- **Hide Thinking (`--hide-thinking`)**: Strip `<think>` tags from model output
+- **Models.dev Integration**: Dynamic model loading from the models.dev API instead of hardcoded models.yaml
+- **Model Refresh (`--refresh-models`)**: Refresh model lists for configured clients
+- **Native Ollama Client**: Dedicated Ollama API client using native `/api/chat` and `/api/embed` endpoints (ported from [blob42/aichat-ng](https://github.com/blob42/aichat-ng))
+- **REPL Path Autocompletion**: Enhanced REPL autocompletion for file paths (ported from [blob42/aichat-ng](https://github.com/blob42/aichat-ng))
+
+See [CHANGELOG.md](CHANGELOG.md) for a complete list of changes.
 
 ## Acknowledgements
 

@@ -809,10 +809,14 @@ fn ret_err<T: std::fmt::Display>(err: T) -> AppResponse {
             "type": "invalid_request_error",
         },
     });
+    // Response builder should not fail with valid data, but handle error gracefully
     Response::builder()
         .header("Content-Type", "application/json")
         .body(Full::new(Bytes::from(data.to_string())).boxed())
-        .unwrap()
+        .unwrap_or_else(|_| {
+            // Fallback: create a minimal error response if builder fails
+            Response::new(Full::new(Bytes::from(r#"{"error":{"message":"Internal server error","type":"server_error"}}"#)).boxed())
+        })
 }
 
 fn parse_messages(message: Vec<Value>) -> Result<Vec<Message>> {

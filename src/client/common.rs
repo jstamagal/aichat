@@ -615,19 +615,23 @@ pub fn catch_error(data: &Value, status: u16) -> Result<()> {
         ) {
             bail!("{message} (code: {typ})");
         }
-    } else if let Some(error) = data["errors"][0].as_object() {
-        if let (Some(code), Some(message)) = (
-            error.get("code").and_then(|v| v.as_u64()),
-            json_str_from_map(error, "message"),
-        ) {
-            bail!("{message} (status: {code})")
+    } else if let Some(errors) = data.get("errors").and_then(|v| v.as_array()) {
+        if let Some(error) = errors.first().and_then(|v| v.as_object()) {
+            if let (Some(code), Some(message)) = (
+                error.get("code").and_then(|v| v.as_u64()),
+                json_str_from_map(error, "message"),
+            ) {
+                bail!("{message} (status: {code})")
+            }
         }
-    } else if let Some(error) = data[0]["error"].as_object() {
-        if let (Some(status), Some(message)) = (
-            json_str_from_map(error, "status"),
-            json_str_from_map(error, "message"),
-        ) {
-            bail!("{message} (status: {status})")
+    } else if let Some(data_array) = data.as_array() {
+        if let Some(error) = data_array.first().and_then(|v| v.get("error")).and_then(|v| v.as_object()) {
+            if let (Some(status), Some(message)) = (
+                json_str_from_map(error, "status"),
+                json_str_from_map(error, "message"),
+            ) {
+                bail!("{message} (status: {status})")
+            }
         }
     } else if let (Some(detail), Some(status)) = (data["detail"].as_str(), data["status"].as_i64())
     {

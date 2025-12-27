@@ -213,7 +213,7 @@ pub fn convert_models_dev_to_provider_models(
             });
             
             let mut model_data: ModelData = serde_json::from_value(model_json)
-                .unwrap_or_else(|_| ModelData::new(&model_id));
+                .unwrap_or_else(|_| ModelData::new(model_id));
             
             // Set embedding-specific fields if this is an embedding model
             if model_data.model_type == "embedding" {

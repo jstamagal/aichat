@@ -208,25 +208,38 @@ pub async fn gemini_chat_completions_streaming(
         let handle = |value: &str| -> Result<()> {
             let data: Value = serde_json::from_str(value)?;
             debug!("stream-data: {data}");
-            if let Some(parts) = data["candidates"][0]["content"]["parts"].as_array() {
-                for (i, part) in parts.iter().enumerate() {
-                    if let Some(text) = part["text"].as_str() {
-                        if i > 0 {
-                            handler.text("\n\n")?;
+            if let Some(candidates) = data.get("candidates").and_then(|v| v.as_array()) {
+                if let Some(candidate) = candidates.first() {
+                    if let Some(parts) = candidate.get("content")
+                        .and_then(|v| v.get("parts"))
+                        .and_then(|v| v.as_array())
+                    {
+                        for (i, part) in parts.iter().enumerate() {
+                            if let Some(text) = part.get("text").and_then(|v| v.as_str()) {
+                                if i > 0 {
+                                    handler.text("\n\n")?;
+                                }
+                                handler.text(text)?;
+                            } else if let (Some(name), Some(args)) = (
+                                part.get("functionCall")
+                                    .and_then(|v| v.get("name"))
+                                    .and_then(|v| v.as_str()),
+                                part.get("functionCall")
+                                    .and_then(|v| v.get("args"))
+                                    .and_then(|v| v.as_object()),
+                            ) {
+                                handler.tool_call(ToolCall::new(name.to_string(), json!(args), None))?;
+                            }
                         }
-                        handler.text(text)?;
-                    } else if let (Some(name), Some(args)) = (
-                        part["functionCall"]["name"].as_str(),
-                        part["functionCall"]["args"].as_object(),
-                    ) {
-                        handler.tool_call(ToolCall::new(name.to_string(), json!(args), None))?;
+                    }
+                    if let Some("SAFETY") = data.get("promptFeedback")
+                        .and_then(|v| v.get("blockReason"))
+                        .and_then(|v| v.as_str())
+                        .or_else(|| candidate.get("finishReason").and_then(|v| v.as_str()))
+                    {
+                        bail!("Blocked due to safety")
                     }
                 }
-            } else if let Some("SAFETY") = data["promptFeedback"]["blockReason"]
-                .as_str()
-                .or_else(|| data["candidates"][0]["finishReason"].as_str())
-            {
-                bail!("Blocked due to safety")
             }
 
             Ok(())
@@ -271,27 +284,47 @@ struct EmbeddingsResBodyPredictionEmbeddings {
 fn gemini_extract_chat_completions_text(data: &Value) -> Result<ChatCompletionsOutput> {
     let mut text_parts = vec![];
     let mut tool_calls = vec![];
-    if let Some(parts) = data["candidates"][0]["content"]["parts"].as_array() {
-        for part in parts {
-            if let Some(text) = part["text"].as_str() {
-                text_parts.push(text);
-            }
-            if let (Some(name), Some(args)) = (
-                part["functionCall"]["name"].as_str(),
-                part["functionCall"]["args"].as_object(),
-            ) {
-                tool_calls.push(ToolCall::new(name.to_string(), json!(args), None));
+    if let Some(candidates) = data.get("candidates").and_then(|v| v.as_array()) {
+        if let Some(candidate) = candidates.first() {
+            if let Some(parts) = candidate.get("content")
+                .and_then(|v| v.get("parts"))
+                .and_then(|v| v.as_array())
+            {
+                for part in parts {
+                    if let Some(text) = part.get("text").and_then(|v| v.as_str()) {
+                        text_parts.push(text);
+                    }
+                    if let (Some(name), Some(args)) = (
+                        part.get("functionCall")
+                            .and_then(|v| v.get("name"))
+                            .and_then(|v| v.as_str()),
+                        part.get("functionCall")
+                            .and_then(|v| v.get("args"))
+                            .and_then(|v| v.as_object()),
+                    ) {
+                        tool_calls.push(ToolCall::new(name.to_string(), json!(args), None));
+                    }
+                }
             }
         }
     }
 
     let text = text_parts.join("\n\n");
     if text.is_empty() && tool_calls.is_empty() {
-        if let Some("SAFETY") = data["promptFeedback"]["blockReason"]
-            .as_str()
-            .or_else(|| data["candidates"][0]["finishReason"].as_str())
-        {
-            bail!("Blocked due to safety")
+        if let Some(candidates) = data.get("candidates").and_then(|v| v.as_array()) {
+            if let Some(candidate) = candidates.first() {
+                if let Some("SAFETY") = data.get("promptFeedback")
+                    .and_then(|v| v.get("blockReason"))
+                    .and_then(|v| v.as_str())
+                    .or_else(|| candidate.get("finishReason").and_then(|v| v.as_str()))
+                {
+                    bail!("Blocked due to safety")
+                } else {
+                    bail!("Invalid response data: {data}");
+                }
+            } else {
+                bail!("Invalid response data: {data}");
+            }
         } else {
             bail!("Invalid response data: {data}");
         }

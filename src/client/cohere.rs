@@ -211,8 +211,12 @@ struct EmbeddingsResBodyEmbeddings {
 }
 
 fn extract_chat_completions(data: &Value) -> Result<ChatCompletionsOutput> {
-    let mut text = data["message"]["content"][0]["text"]
-        .as_str()
+    let mut text = data.get("message")
+        .and_then(|v| v.get("content"))
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|v| v.get("text"))
+        .and_then(|v| v.as_str())
         .unwrap_or_default()
         .to_string();
 

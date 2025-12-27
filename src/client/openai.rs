@@ -126,69 +126,77 @@ pub async fn openai_chat_completions_streaming(
         }
         let data: Value = serde_json::from_str(&message.data)?;
         debug!("stream-data: {data}");
-        if let Some(text) = data["choices"][0]["delta"]["content"]
-            .as_str()
-            .filter(|v| !v.is_empty())
-        {
-            if reasoning_state == 1 {
-                handler.text("\n</think>\n\n")?;
-                reasoning_state = 0;
-            }
-            handler.text(text)?;
-        } else if let Some(text) = data["choices"][0]["delta"]["reasoning_content"]
-            .as_str()
-            .or_else(|| data["choices"][0]["delta"]["reasoning"].as_str())
-            .filter(|v| !v.is_empty())
-        {
-            if reasoning_state == 0 {
-                handler.text("<think>\n")?;
-                reasoning_state = 1;
-            }
-            handler.text(text)?;
-        }
-        if let (Some(function), index, id) = (
-            data["choices"][0]["delta"]["tool_calls"][0]["function"].as_object(),
-            data["choices"][0]["delta"]["tool_calls"][0]["index"].as_u64(),
-            data["choices"][0]["delta"]["tool_calls"][0]["id"]
-                .as_str()
-                .filter(|v| !v.is_empty()),
-        ) {
-            if reasoning_state == 1 {
-                handler.text("\n</think>\n\n")?;
-                reasoning_state = 0;
-            }
-            let maybe_call_id = format!("{}/{}", id.unwrap_or_default(), index.unwrap_or_default());
-            if maybe_call_id != call_id && maybe_call_id.len() >= call_id.len() {
-                if !function_name.is_empty() {
-                    if function_arguments.is_empty() {
-                        function_arguments = String::from("{}");
+        if let Some(choices) = data.get("choices").and_then(|v| v.as_array()) {
+            if let Some(choice) = choices.first() {
+                if let Some(delta) = choice.get("delta") {
+                    if let Some(text) = delta.get("content")
+                        .and_then(|v| v.as_str())
+                        .filter(|v| !v.is_empty())
+                    {
+                        if reasoning_state == 1 {
+                            handler.text("\n</think>\n\n")?;
+                            reasoning_state = 0;
+                        }
+                        handler.text(text)?;
+                    } else if let Some(text) = delta.get("reasoning_content")
+                        .and_then(|v| v.as_str())
+                        .or_else(|| delta.get("reasoning").and_then(|v| v.as_str()))
+                        .filter(|v| !v.is_empty())
+                    {
+                        if reasoning_state == 0 {
+                            handler.text("<think>\n")?;
+                            reasoning_state = 1;
+                        }
+                        handler.text(text)?;
                     }
-                    let arguments: Value = function_arguments.parse().with_context(|| {
-                        format!("Tool call '{function_name}' have non-JSON arguments '{function_arguments}'")
-                    })?;
-                    handler.tool_call(ToolCall::new(
-                        function_name.clone(),
-                        arguments,
-                        normalize_function_id(&function_id),
-                    ))?;
+                    if let Some(tool_calls) = delta.get("tool_calls").and_then(|v| v.as_array()) {
+                        if let Some(tool_call) = tool_calls.first() {
+                            if let (Some(function), index, Some(id)) = (
+                                tool_call.get("function").and_then(|v| v.as_object()),
+                                tool_call.get("index").and_then(|v| v.as_u64()),
+                                tool_call.get("id")
+                                    .and_then(|v| v.as_str())
+                                    .filter(|v| !v.is_empty()),
+                            ) {
+                                if reasoning_state == 1 {
+                                    handler.text("\n</think>\n\n")?;
+                                    reasoning_state = 0;
+                                }
+                                let maybe_call_id = format!("{}/{}", id, index.unwrap_or(0));
+                                if maybe_call_id != call_id && maybe_call_id.len() >= call_id.len() {
+                                    if !function_name.is_empty() {
+                                        if function_arguments.is_empty() {
+                                            function_arguments = String::from("{}");
+                                        }
+                                        let arguments: Value = function_arguments.parse().with_context(|| {
+                                            format!("Tool call '{function_name}' have non-JSON arguments '{function_arguments}'")
+                                        })?;
+                                        handler.tool_call(ToolCall::new(
+                                            function_name.clone(),
+                                            arguments,
+                                            normalize_function_id(&function_id),
+                                        ))?;
+                                    }
+                                    function_name.clear();
+                                    function_arguments.clear();
+                                    function_id.clear();
+                                    call_id = maybe_call_id;
+                                }
+                                if let Some(name) = function.get("name").and_then(|v| v.as_str()) {
+                                    if name.starts_with(&function_name) {
+                                        function_name = name.to_string();
+                                    } else {
+                                        function_name.push_str(name);
+                                    }
+                                }
+                                if let Some(arguments) = function.get("arguments").and_then(|v| v.as_str()) {
+                                    function_arguments.push_str(arguments);
+                                }
+                                function_id = id.to_string();
+                            }
+                        }
+                    }
                 }
-                function_name.clear();
-                function_arguments.clear();
-                function_id.clear();
-                call_id = maybe_call_id;
-            }
-            if let Some(name) = function.get("name").and_then(|v| v.as_str()) {
-                if name.starts_with(&function_name) {
-                    function_name = name.to_string();
-                } else {
-                    function_name.push_str(name);
-                }
-            }
-            if let Some(arguments) = function.get("arguments").and_then(|v| v.as_str()) {
-                function_arguments.push_str(arguments);
-            }
-            if let Some(id) = id {
-                function_id = id.to_string();
             }
         }
         Ok(false)
@@ -359,18 +367,39 @@ pub fn openai_build_embeddings_body(data: &EmbeddingsData, model: &Model) -> Val
 }
 
 pub fn openai_extract_chat_completions(data: &Value) -> Result<ChatCompletionsOutput> {
-    let text = data["choices"][0]["message"]["content"]
-        .as_str()
+    let text = data.get("choices")
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|v| v.get("message"))
+        .and_then(|v| v.get("content"))
+        .and_then(|v| v.as_str())
         .unwrap_or_default();
 
-    let reasoning = data["choices"][0]["message"]["reasoning_content"]
-        .as_str()
-        .or_else(|| data["choices"][0]["message"]["reasoning"].as_str())
+    let reasoning = data.get("choices")
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|v| v.get("message"))
+        .and_then(|v| v.get("reasoning_content"))
+        .and_then(|v| v.as_str())
+        .or_else(|| {
+            data.get("choices")
+                .and_then(|v| v.as_array())
+                .and_then(|arr| arr.first())
+                .and_then(|v| v.get("message"))
+                .and_then(|v| v.get("reasoning"))
+                .and_then(|v| v.as_str())
+        })
         .unwrap_or_default()
         .trim();
 
     let mut tool_calls = vec![];
-    if let Some(calls) = data["choices"][0]["message"]["tool_calls"].as_array() {
+    if let Some(calls) = data.get("choices")
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|v| v.get("message"))
+        .and_then(|v| v.get("tool_calls"))
+        .and_then(|v| v.as_array())
+    {
         for call in calls {
             if let (Some(name), Some(arguments), Some(id)) = (
                 call["function"]["name"].as_str(),

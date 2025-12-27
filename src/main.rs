@@ -80,10 +80,13 @@ fn strip_markdown(text: &str) -> String {
     // Remove code blocks
     result = CODE_BLOCK_STRIP_RE.replace_all(&result, |caps: &fancy_regex::Captures| {
         // Extract just the code content
-        let block = caps.get(0).unwrap().as_str();
-        let lines: Vec<&str> = block.lines().collect();
-        if lines.len() > 2 {
-            lines[1..lines.len()-1].join("\n")
+        if let Some(block) = caps.get(0) {
+            let lines: Vec<&str> = block.as_str().lines().collect();
+            if lines.len() > 2 {
+                lines[1..lines.len()-1].join("\n")
+            } else {
+                String::new()
+            }
         } else {
             String::new()
         }
@@ -94,17 +97,26 @@ fn strip_markdown(text: &str) -> String {
     
     // Remove bold/italic
     result = BOLD_ITALIC_RE.replace_all(&result, |caps: &fancy_regex::Captures| {
-        caps.get(1).or_else(|| caps.get(2)).unwrap().as_str().to_string()
+        caps.get(1)
+            .or_else(|| caps.get(2))
+            .map(|m| m.as_str().to_string())
+            .unwrap_or_default()
     }).to_string();
     
     // Remove bold
     result = BOLD_RE.replace_all(&result, |caps: &fancy_regex::Captures| {
-        caps.get(1).or_else(|| caps.get(2)).unwrap().as_str().to_string()
+        caps.get(1)
+            .or_else(|| caps.get(2))
+            .map(|m| m.as_str().to_string())
+            .unwrap_or_default()
     }).to_string();
     
     // Remove italic
     result = ITALIC_RE.replace_all(&result, |caps: &fancy_regex::Captures| {
-        caps.get(1).or_else(|| caps.get(2)).unwrap().as_str().to_string()
+        caps.get(1)
+            .or_else(|| caps.get(2))
+            .map(|m| m.as_str().to_string())
+            .unwrap_or_default()
     }).to_string();
     
     // Remove headers

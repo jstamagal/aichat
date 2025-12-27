@@ -149,6 +149,8 @@ pub struct Config {
     pub user_agent: Option<String>,
     pub save_shell_history: bool,
     pub sync_models_url: Option<String>,
+    pub models_dev_url: Option<String>,
+    pub models_dev_enabled: bool,
 
     pub clients: Vec<ClientConfig>,
 
@@ -227,6 +229,8 @@ impl Default for Config {
             user_agent: None,
             save_shell_history: true,
             sync_models_url: None,
+            models_dev_url: None,
+            models_dev_enabled: true,
 
             clients: vec![],
 
@@ -2487,6 +2491,12 @@ impl Config {
         }
         if let Some(v) = read_env_value::<String>(&get_env_name("sync_models_url")) {
             self.sync_models_url = v;
+        }
+        if let Some(v) = read_env_value::<String>(&get_env_name("models_dev_url")) {
+            self.models_dev_url = v;
+        }
+        if let Some(Some(v)) = read_env_bool(&get_env_name("models_dev_enabled")) {
+            self.models_dev_enabled = v;
         }
     }
 

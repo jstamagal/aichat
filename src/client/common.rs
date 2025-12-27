@@ -23,10 +23,93 @@ use tokio::sync::mpsc::unbounded_channel;
 const MODELS_YAML: &str = include_str!("../../models.yaml");
 
 pub static ALL_PROVIDER_MODELS: LazyLock<Vec<ProviderModels>> = LazyLock::new(|| {
-    Config::loal_models_override()
-        .ok()
-        .unwrap_or_else(|| serde_yaml::from_str(MODELS_YAML).unwrap())
+    // First, try to load from local override (highest priority)
+    if let Ok(models) = Config::loal_models_override() {
+        return models;
+    }
+    
+    // Try to load from models.dev API (with fallback to models.yaml)
+    load_models_with_fallback()
 });
+
+fn load_models_with_fallback() -> Vec<ProviderModels> {
+    // Check if models.dev is enabled (default: true)
+    // Use AICHAT_ prefix directly since get_env_name is private
+    let models_dev_enabled = std::env::var("AICHAT_MODELS_DEV_ENABLED")
+        .ok()
+        .and_then(|v| v.parse::<bool>().ok())
+        .unwrap_or(true);
+    
+    if !models_dev_enabled {
+        log::debug!("models.dev is disabled, using embedded models.yaml");
+        return serde_yaml::from_str(MODELS_YAML)
+            .unwrap_or_else(|e| {
+                log::error!("Failed to parse embedded models.yaml: {}", e);
+                Vec::new()
+            });
+    }
+    
+    // Get models.dev URL from environment or use default
+    let models_dev_url = std::env::var("AICHAT_MODELS_DEV_URL")
+        .ok();
+    
+    // Try to get a tokio runtime handle to run async code
+    match tokio::runtime::Handle::try_current() {
+        Ok(handle) => {
+            // We're in a tokio runtime, can use block_on
+            handle.block_on(async {
+                match crate::client::models_dev::get_models_dev(models_dev_url.as_deref()).await {
+                    Ok(models) => {
+                        log::info!("Loaded {} providers from models.dev", models.len());
+                        return models;
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to load from models.dev: {}. Falling back to models.yaml", e);
+                        log::debug!("models.dev error details: {:?}", e);
+                    }
+                }
+                // Fallback to embedded models.yaml
+                serde_yaml::from_str(MODELS_YAML)
+                    .unwrap_or_else(|e| {
+                        log::error!("Failed to parse embedded models.yaml: {}", e);
+                        Vec::new()
+                    })
+            })
+        }
+        Err(_) => {
+            // No tokio runtime available, try to create a temporary one
+            match tokio::runtime::Runtime::new() {
+                Ok(rt) => rt.block_on(async {
+                    match crate::client::models_dev::get_models_dev(models_dev_url.as_deref()).await {
+                        Ok(models) => {
+                            log::info!("Loaded {} providers from models.dev", models.len());
+                            return models;
+                        }
+                        Err(e) => {
+                            log::warn!("Failed to load from models.dev: {}. Falling back to models.yaml", e);
+                            log::debug!("models.dev error details: {:?}", e);
+                        }
+                    }
+                    // Fallback to embedded models.yaml
+                    serde_yaml::from_str(MODELS_YAML)
+                        .unwrap_or_else(|e| {
+                            log::error!("Failed to parse embedded models.yaml: {}", e);
+                            Vec::new()
+                        })
+                }),
+                Err(_) => {
+                    // Can't create runtime, fallback to models.yaml
+                    log::warn!("No tokio runtime available, using embedded models.yaml");
+                    serde_yaml::from_str(MODELS_YAML)
+                        .unwrap_or_else(|e| {
+                            log::error!("Failed to parse embedded models.yaml: {}", e);
+                            Vec::new()
+                        })
+                }
+            }
+        }
+    }
+}
 
 pub static EMBEDDING_MODEL_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"((^|/)(bge-|e5-|uae-|gte-|text-)|embed|multilingual|minilm)").unwrap()

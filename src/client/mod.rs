@@ -4,6 +4,7 @@ mod message;
 #[macro_use]
 mod macros;
 mod model;
+mod models_dev;
 mod stream;
 
 pub use crate::function::ToolCall;
